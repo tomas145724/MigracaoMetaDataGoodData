@@ -24,7 +24,7 @@ class LoginFrame(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure((0, 1, 2, 3), weight=1)
         
-        self.label = ctk.CTkLabel(self, text="Autentição GoodData", font=ctk.CTkFont(size=20, weight="bold"))
+        self.label = ctk.CTkLabel(self, text="Autenticação GoodData", font=ctk.CTkFont(size=20, weight="bold"))
         self.label.grid(row=0, column=0, pady=(40, 20))
 
          # Frame dos campos de login
@@ -128,7 +128,7 @@ class ExportImportFrame(ctk.CTkFrame):
         # Título
         self.title_label = ctk.CTkLabel(
             self, 
-            text="Migração de Metadados GoodData", 
+            text="Migração de Relatórios GoodData", 
             font=ctk.CTkFont(size=16, weight="bold")
         )
         self.title_label.grid(row=0, column=0, columnspan=2, pady=(10, 20))
@@ -403,7 +403,7 @@ class ExportImportFrame(ctk.CTkFrame):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Migração de Metadados GoodData")	
+        self.title("ReportTransfer - Migração de Relatórios GoodData")	
         self.geometry("900x700")
         self.maxsize(width=800, height=700)
         self.resizable(width=True, height=False)
