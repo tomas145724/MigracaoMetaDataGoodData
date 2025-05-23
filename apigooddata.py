@@ -12,54 +12,37 @@ def test_dns_resolution(hostname):
     except socket.gaierror:
         return False
 
-def login_gooddata(login, password):
+def login_gooddata(login, senha):
     url = "https://analytics.moveresoftware.com/gdc/account/login"
-    
-    # Primeiro verifica a resolução DNS
-    if not test_dns_resolution("analytics.moveresoftware.com"):
-        raise Exception("Falha ao resolver o nome do host. Verifique sua conexão com a internet.")
-    
     payload = {
         "postUserLogin": {
             "login": login,
-            "password": password,
+            "password": senha,
             "remember": 1
         }
     }
-    
     headers = {
         "User-Agent": "MyApp/1.0 (Python)",
         "Content-Type": "application/json"
     }
-    
-    try:
-        response = requests.post(url, json=payload, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.cookies
-    except ConnectionError as e:
-        raise Exception(f"Erro de conexão: {str(e)}")
-    except RequestException as e:
-        raise Exception(f"Erro na requisição: {str(e)}")
+    response = requests.post(url, json=payload, headers=headers, timeout=10)
+    response.raise_for_status()
+    print("Login bem-sucedido!")
+    return response.cookies 
 
 def is_user_admin(cookies):
     """Verifica se o usuário tem permissões de administrador"""
     try:
-        # Endpoint que retorna informações do usuário logado
         profile_url = "https://analytics.moveresoftware.com/gdc/account/profile/current"
         headers = {
             "User-Agent": "MyApp/1.0 (Python)",
             "Accept": "application/json"
         }
-        
         response = requests.get(profile_url, headers=headers, cookies=cookies, timeout=10)
         response.raise_for_status()
-        
         profile_data = response.json()
         permissions = profile_data.get('accountSetting', {}).get('permissions', [])
-        
-        # Verifica se tem permissão de admin (ajuste conforme a API do GoodData)
         return 'admin' in permissions or 'manage' in permissions
-        
     except Exception as e:
         print(f"Erro ao verificar permissões: {str(e)}")
         return False
@@ -94,21 +77,16 @@ def export_partial_metadata(workspace_id, report_url, cookies, exportAttributePr
     try:
         response = requests.post(url, headers=headers, cookies=cookies, json=payload, timeout=15)
         response.raise_for_status()
-        
-        # Extrai o JSON da resposta HTML
         match = re.search(r"<pre>(.*?)</pre>", response.text, re.DOTALL)
         if not match:
             raise Exception("Não foi possível extrair o JSON da resposta.")
-            
         json_str = match.group(1)
         json_str = re.sub(r'<.*?>', '', json_str)
         json_str = json_str.replace('&#x22;', '"')
-        
         data = json.loads(json_str)
         token = data.get('partialMDArtifact', {}).get('token')
         if not token:
             raise Exception("Token de exportação não encontrado.")
-            
         return token
     except RequestException as e:
         if e.response is not None:
@@ -117,77 +95,78 @@ def export_partial_metadata(workspace_id, report_url, cookies, exportAttributePr
 
 def import_partial_metadata(workspace_id_destino, token, cookies, overwriteNewer=0, updateLDMObjects=0, importAttributeProperties=0):
     url = f"https://analytics.moveresoftware.com/gdc/md/{workspace_id_destino}/maintenance/partialmdimport"
+    
+    # Headers essenciais
     headers = {
         "User-Agent": "MyApp/1.0 (Python)",
         "Content-Type": "application/json",
-        "Accept": "application/json, text/html"  # Aceita ambos os formatos
+        "Accept": "application/json",
+        "X-GDC-TASK-PRIORITY": "high"
     }
+    
+    # Payload mínimo e correto conforme documentação
     payload = {
         "partialMDImport": {
             "token": token,
-            "overwriteNewer": int(overwriteNewer),
-            "updateLDMObjects": int(updateLDMObjects),
-            "importAttributeProperties": int(importAttributeProperties)
+            "overwriteNewer": bool(overwriteNewer),
+            "updateLDMObjects": bool(updateLDMObjects),
+            "importAttributeProperties": bool(importAttributeProperties)
         }
     }
-
+    
     try:
-        # 1. Verifica se o workspace existe
-        test_url = f"https://analytics.moveresoftware.com/gdc/projects/{workspace_id_destino}"
-        test_response = requests.get(test_url, cookies=cookies, timeout=10)
-        if test_response.status_code == 404:
-            raise Exception(f"Workspace {workspace_id_destino} não encontrado")
-
-        # 2. Envia a requisição de importação
-        response = requests.post(url, headers=headers, cookies=cookies, json=payload, timeout=30)
+        # Debug do payload antes do envio
+        print(f"\n[DEBUG] Payload final para importação:")
+        print(json.dumps(payload, indent=2))
         
-        # 3. Tratamento especial para quando a API retorna 404
-        if response.status_code == 404:
-            print("AVISO: Endpoint retornou 404, mas a importação pode ter sido iniciada")
-            return f"/gdc/md/{workspace_id_destino}/tasks/unknown_status"
+        response = requests.post(
+            url,
+            headers=headers,
+            cookies=cookies,
+            json=payload,
+            timeout=30
+        )
 
-        # 4. Processa a resposta (JSON ou HTML)
-        try:
-            data = response.json()  # Tenta como JSON puro primeiro
-        except ValueError:
-            data = extract_json_from_html(response.text)  # Fallback para HTML
+        # Debug da resposta
+        print(f"\n[DEBUG] Resposta da API (status {response.status_code}): {response.text}")
 
-        # 5. Extrai a URI de status
-        uri_status = data.get('uri')
-        if not uri_status:
-            print("AVISO: URI de status não encontrada, mas a importação pode ter sido iniciada")
-            return f"/gdc/md/{workspace_id_destino}/tasks/unknown_status"
-
-        return uri_status
+        # Tratamento de respostas
+        if response.status_code == 200:
+            try:
+                return response.json()
+            except ValueError:
+                return {"status": "success", "message": "Importação realizada mas resposta inválida"}
+        
+        if response.status_code == 400:
+            error_msg = response.json().get("error", {}).get("message", "Erro na requisição")
+            if "STRUCTURE INVALID" in error_msg:
+                raise Exception("Estrutura do payload inválida - remova parâmetros redundantes")
+            raise Exception(f"Erro na requisição: {error_msg}")
+        
+        response.raise_for_status()
 
     except Exception as e:
-        error_msg = f"Erro durante a importação: {str(e)}"
-        if 'response' in locals():
-            error_msg += f"\nStatus Code: {response.status_code}"
-            error_msg += f"\nResposta: {response.text[:500]}"
+        error_msg = f"Erro na importação: {str(e)}"
+        if hasattr(e, 'response') and e.response:
+            error_msg += f"\nStatus: {e.response.status_code}\nResposta: {e.response.text[:500]}"
         raise Exception(error_msg)
 
 def extract_json_from_html(html_text):
-    """Extrai JSON de respostas HTML de forma resiliente"""
     try:
-        # Tenta encontrar o JSON dentro de <pre>
         match = re.search(r"<pre[^>]*>(.*?)</pre>", html_text, re.DOTALL)
         if match:
             json_str = match.group(1)
-            # Limpeza do conteúdo JSON
-            json_str = re.sub(r'<[^>]+>', '', json_str)  # Remove tags
-            json_str = re.sub(r'&#x22;|&quot;', '"', json_str)  # Aspas
-            json_str = re.sub(r'&#39;|&apos;', "'", json_str)  # Apóstrofos
+            json_str = re.sub(r'<[^>]+>', '', json_str)
+            json_str = re.sub(r'&#x22;|&quot;', '"', json_str)
+            json_str = re.sub(r'&#39;|&apos;', "'", json_str)
             return json.loads(json_str)
-        
-        # Se não encontrou <pre>, tenta extrair JSON direto do HTML
         json_match = re.search(r'({.*})', html_text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group(1))
-            
         raise Exception("Nenhum JSON encontrado no HTML")
     except Exception as e:
         raise Exception(f"Falha ao extrair JSON do HTML: {str(e)}")
+
 def get_import_status(workspace_id, status_uri, cookies):
     url = f"https://analytics.moveresoftware.com{status_uri}"
     headers = {
@@ -221,6 +200,24 @@ def wait_for_import_status_ok(workspace_id, status_uri, cookies, interval=5, max
             print(f"Erro ao verificar status: {str(e)}")
             time.sleep(interval)
             attempts += 1
-            
-            
     raise Exception("Tempo máximo de espera atingido.")
+
+def export_and_import(workspace_origem, workspace_destino, report_url, cookies, export_opts, import_opts):
+    try:
+        print("[1/3] Exportando metadados...")
+        token = export_partial_metadata(
+            workspace_origem,
+            report_url,
+            cookies,
+            **export_opts
+        )
+        print("[2/3] Importando (timeout 5s)...")
+        result = import_partial_metadata(
+            workspace_destino,
+            token,
+            cookies,
+            **import_opts
+        )
+        return result
+    except Exception as e:
+        raise Exception(f"Falha no fluxo integrado: {str(e)}")
